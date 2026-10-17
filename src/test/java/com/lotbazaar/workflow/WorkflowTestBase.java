@@ -1,6 +1,5 @@
 package com.lotbazaar.workflow;
 
-import com.lotbazaar.TestcontainersConfiguration;
 import com.lotbazaar.commerce.ClaimService;
 import com.lotbazaar.commerce.FulfilmentService;
 import com.lotbazaar.commerce.OfferService;
@@ -13,7 +12,6 @@ import com.lotbazaar.tenancy.TenantDirectory;
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
@@ -28,7 +26,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Shared fixtures: each test builds its own tenant so tests never see each other's rows. */
 @SpringBootTest
-@Import(TestcontainersConfiguration.class)
 abstract class WorkflowTestBase {
 
 	@Autowired

@@ -14,7 +14,7 @@ The web apps (seller console and buyer storefront) live in [lotbazaar-app](https
 | Data access | `JdbcClient` with plain SQL, Flyway migrations |
 | Database | PostgreSQL 16 with row-level security (RLS) for tenant isolation |
 | Auth | HS256 JWTs issued by the app (Keycloak planned) |
-| Tests | JUnit 5, Testcontainers (real PostgreSQL), MockMvc |
+| Tests | JUnit 5 and MockMvc against a real local PostgreSQL test database |
 
 ## Project layout
 
@@ -31,36 +31,46 @@ src/main/java/com/lotbazaar/
 src/main/resources/db/migration/   Flyway migrations V1 to V4
 src/test/java/com/lotbazaar/       Workflow, concurrency and access tests
 docs/                              Business plan, PRD, architecture, ADRs, epics, plans
-docker-compose.yml                 PostgreSQL, Redis, RabbitMQ, Keycloak for local development
+Dockerfile                         Production image (see Deployment)
 ```
 
 ## Run locally
 
-You need Docker (Colima works), Java 17+ and nothing else; the Maven wrapper is included.
+You need **PostgreSQL 16** installed on the machine (Postgres.app or `brew install postgresql@16` on Mac, the postgresql.org installer on Windows, `apt install postgresql-16` on Linux) and **Java 17+**. The Maven wrapper is included. No Docker is needed.
+
+**1. Create the user and databases once** (in `psql` or DBeaver, as a superuser such as `postgres`):
+
+```sql
+CREATE USER lotbazaar WITH PASSWORD 'lotbazaar' CREATEROLE;  -- CREATEROLE: the first migration creates the RLS role lotbazaar_app
+CREATE DATABASE lotbazaar OWNER lotbazaar;                   -- app and demo data
+CREATE DATABASE lotbazaar_test OWNER lotbazaar;              -- automated tests
+```
+
+**2. Start the API** on http://localhost:8080. Flyway creates the tables; the `demo` profile seeds two tenants, users, stock, lots and orders.
 
 ```bash
-# 1. Infrastructure. PostgreSQL listens on 5433 so it does not clash with a local install on 5432.
-docker compose up -d postgres redis rabbitmq
-
-# 2. API on http://localhost:8080. The "demo" profile seeds two tenants, users, stock, lots and orders.
 ./mvnw spring-boot:run -Dspring-boot.run.profiles=demo
 ```
 
 The demo profile seeds only into an empty database. To start over:
 
 ```bash
-docker exec <postgres-container> psql -U lotbazaar -d postgres \
-  -c "DROP DATABASE lotbazaar" -c "CREATE DATABASE lotbazaar OWNER lotbazaar"
+psql -d postgres -c "DROP DATABASE lotbazaar" -c "CREATE DATABASE lotbazaar OWNER lotbazaar"
+```
+
+**Viewing data in DBeaver or psql.** Every tenant table uses `FORCE ROW LEVEL SECURITY`, so even the `lotbazaar` owner sees **no rows** unless a tenant is set. Either connect as a superuser (sees everything), or set the tenant first in the same session:
+
+```sql
+SELECT set_config('app.tenant_id', (SELECT id::text FROM tenant WHERE code = 'rk-liquidators'), false);
 ```
 
 ### Configuration
 
 | Variable | Default | Notes |
 |---|---|---|
-| `DB_URL` | `jdbc:postgresql://localhost:5433/lotbazaar` | Used by the app and by Flyway |
+| `DB_URL` | `jdbc:postgresql://localhost:5432/lotbazaar` | Used by the app and by Flyway |
 | `DB_USER` / `DB_PASSWORD` | `lotbazaar` / `lotbazaar` | Must own the schema (Flyway runs DDL) |
 | `JWT_SECRET` | dev-only value | **Set a long random value in every non-local environment** |
-| `REDIS_HOST` / `RABBIT_HOST` | `localhost` | |
 
 ### Demo accounts
 
@@ -110,10 +120,10 @@ Role rules are in `SecurityConfig.java`.
 ## Tests
 
 ```bash
-./mvnw test        # needs Docker for Testcontainers
+./mvnw test        # uses the local lotbazaar_test database
 ```
 
-On Colima, first run `export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock`.
+Set `TEST_DB_URL` to use a different test database. Each test creates its own random tenants, so the database can be reused between runs. CI runs the same suite against a PostgreSQL service on GitHub Actions.
 
 The suite (25 tests) covers the inbound flow, sales and offers, fulfilment and invoicing, claims, role access, tenant isolation, dashboard figures and concurrent Buy Now.
 
@@ -126,6 +136,19 @@ Each is marked `shortcut:` in the code.
 - IRN and e-way bill numbers are generated locally (planned: GSP sandbox). One flat GST rate per tenant.
 - Lot photos are stored in PostgreSQL behind an unguessable URL (planned: S3 with signed CDN URLs).
 - Not built yet: auctions, warehouse-to-warehouse transfers, bin-to-bin moves, cycle counts.
+
+## Deployment
+
+The `Dockerfile` builds a production image: the jar is compiled on JDK 17 and runs on a slim Java 17 runtime as a non-root user, on port 8080.
+
+```bash
+docker build -t lotbazaar-service .
+docker run -p 8080:8080 \
+  -e DB_URL=jdbc:postgresql://<db-host>:5432/lotbazaar -e DB_USER=lotbazaar -e DB_PASSWORD=<secret> \
+  -e JWT_SECRET=<long-random-secret> lotbazaar-service
+```
+
+Do not enable the `demo` profile in production. The database user needs `CREATEROLE` for the first migration, and it should not be a superuser (row-level security must apply).
 
 ## Documentation
 

@@ -1,6 +1,5 @@
 package com.lotbazaar.commerce;
 
-import com.lotbazaar.TestcontainersConfiguration;
 import com.lotbazaar.identity.UserService;
 import com.lotbazaar.inventory.InventoryService;
 import com.lotbazaar.lots.LotService;
@@ -9,7 +8,6 @@ import com.lotbazaar.tenancy.TenantDirectory;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 import java.math.BigDecimal;
@@ -24,7 +22,6 @@ import java.util.concurrent.Future;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest
-@Import(TestcontainersConfiguration.class)
 class BuyNowConcurrencyTests {
 
 	@Autowired

@@ -3,9 +3,17 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: lotbazaar_test
+          POSTGRES_USER: lotbazaar
+          POSTGRES_PASSWORD: lotbazaar
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: '17', cache: maven }
-      # Integration tests start PostgreSQL through Testcontainers (Docker is available on the runner).
       - run: ./mvnw -B test
