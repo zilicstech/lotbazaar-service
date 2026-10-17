@@ -48,7 +48,7 @@ public class InventoryService {
 
 	public record CartonView(UUID id, String lpn, String containerRef, String skuCode, String brand, String category,
 			String gender, String grade, String mrpBand, int pieceCount, int weightG, BigDecimal totalMrp,
-			String sizeTally, String status, UUID lotId, String warehouse, String bin) {
+			String sizeTally, String status, UUID lotId, String warehouse, String bin, java.time.Instant createdAt) {
 	}
 
 	public record StockLine(String skuCode, String brand, String category, String gender, String grade,
@@ -59,7 +59,7 @@ public class InventoryService {
 	private static final String CARTON_SELECT = """
 			select h.id, h.lpn, c.ref as container_ref, b.sku_code, br.name as brand, ca.name as category,
 			       b.gender, b.grade, b.mrp_band, h.piece_count, h.weight_g, h.total_mrp,
-			       h.size_tally::text as size_tally, h.status, h.lot_id, w.name as warehouse, bl.code as bin
+			       h.size_tally::text as size_tally, h.status, h.lot_id, w.name as warehouse, bl.code as bin, h.created_at
 			from handling_unit h
 			join container c on c.id = h.container_id
 			join warehouse w on w.id = h.warehouse_id
