@@ -35,6 +35,33 @@ class InboundTests extends WorkflowTestBase {
 	}
 
 	@Test
+	void priceLinesSetPiecesSizesAndMrp() {
+		var s = shop();
+		var c = container(s);
+		// Same size at two tag prices, as read off the tags at the sorting table.
+		var lines = List.of(new InventoryService.PriceLine("s", new BigDecimal("1000"), 10),
+				new InventoryService.PriceLine("S", new BigDecimal("2000"), 10),
+				new InventoryService.PriceLine("M", new BigDecimal("1499.50"), 2));
+		// The client's own piece count, MRP and tally are ignored when price lines are given.
+		var carton = as(s.tenant(), () -> inventory.addCarton(s.tenant(), c, new InventoryService.NewCarton(s.brand(),
+				s.category(), "M", "A", 1, 6000, BigDecimal.ONE, Map.of("XL", 1), lines)));
+		assertThat(carton.pieceCount()).isEqualTo(22);
+		assertThat(carton.totalMrp()).isEqualByComparingTo("32999.00");
+		assertThat(carton.sizeTally()).contains("\"S\": 20").contains("\"M\": 2");
+		assertThat(carton.priceLines()).contains("2000").contains("1499.5");
+		assertThat(carton.mrpBand()).isEqualTo("1000_1499"); // average 1,499.95 per piece
+		assertThat(as(s.tenant(), () -> inventory.container(c)).totalMrp()).isEqualByComparingTo("32999.00");
+
+		assertStatus(400, "MRP per piece", () -> as(s.tenant(), () -> inventory.addCarton(s.tenant(), c,
+				new InventoryService.NewCarton(s.brand(), s.category(), "M", "A", 1, 100, BigDecimal.ONE, Map.of(),
+						List.of(new InventoryService.PriceLine("S", BigDecimal.ZERO, 5))))));
+		assertStatus(400, "pieces", () -> as(s.tenant(), () -> inventory.addCarton(s.tenant(), c,
+				new InventoryService.NewCarton(s.brand(), s.category(), "M", "A", 1, 100, BigDecimal.ONE, Map.of(),
+						List.of(new InventoryService.PriceLine("S", BigDecimal.TEN, 0))))));
+		assertThat(as(s.tenant(), () -> inventory.ledgerDrift())).isZero();
+	}
+
+	@Test
 	void putawayMakesCartonSellable() {
 		var s = shop();
 		var c = container(s);

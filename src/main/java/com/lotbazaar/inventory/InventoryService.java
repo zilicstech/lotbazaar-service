@@ -42,13 +42,56 @@ public class InventoryService {
 	public record BinView(String code, String warehouse, int cartons) {
 	}
 
-	public record NewCarton(UUID brandId, UUID categoryId, String gender, String grade, int pieceCount, int weightG,
-			BigDecimal totalMrp, Map<String, Integer> sizeTally) {
+	/**
+	 * One carton at the sorting table. When {@code priceLines} are given (size, tag MRP per piece, pieces), the piece
+	 * count, size tally and total MRP are derived from them and the client's own values are ignored.
+	 */
+	public record NewCarton(UUID brandId, UUID categoryId, String gender, String grade, Integer pieceCount, int weightG,
+			BigDecimal totalMrp, Map<String, Integer> sizeTally, List<PriceLine> priceLines) {
+
+		public NewCarton(UUID brandId, UUID categoryId, String gender, String grade, int pieceCount, int weightG,
+				BigDecimal totalMrp, Map<String, Integer> sizeTally) {
+			this(brandId, categoryId, gender, grade, pieceCount, weightG, totalMrp, sizeTally, null);
+		}
+
+		NewCarton withTotalsFromLines() {
+			if (priceLines == null || priceLines.isEmpty()) {
+				return this;
+			}
+			var tally = new java.util.TreeMap<String, Integer>();
+			var mrp = BigDecimal.ZERO;
+			int pieces = 0;
+			for (var l : priceLines) {
+				l.validate();
+				tally.merge(l.size().trim().toUpperCase(), l.pieces(), Integer::sum);
+				mrp = mrp.add(l.mrp().multiply(BigDecimal.valueOf(l.pieces())));
+				pieces += l.pieces();
+			}
+			return new NewCarton(brandId, categoryId, gender, grade, pieces, weightG, mrp.setScale(2, RoundingMode.HALF_UP),
+					tally, priceLines);
+		}
+	}
+
+	/** A group of pieces of one size sharing one tag MRP. */
+	public record PriceLine(String size, BigDecimal mrp, int pieces) {
+
+		void validate() {
+			if (size == null || !size.trim().toUpperCase().matches("[A-Z0-9]{1,5}")) {
+				throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Size must be 1-5 letters or digits, e.g. S, XL, 32");
+			}
+			if (mrp == null || mrp.signum() <= 0 || mrp.compareTo(BigDecimal.valueOf(1_000_000)) > 0) {
+				throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "MRP per piece must be between ₹0.01 and ₹10,00,000 (size " + size + ")");
+			}
+			if (pieces <= 0 || pieces > 5000) {
+				throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Number of pieces must be 1-5000 (size " + size + ")");
+			}
+		}
 	}
 
 	public record CartonView(UUID id, String lpn, String containerRef, String skuCode, String brand, String category,
 			String gender, String grade, String mrpBand, int pieceCount, int weightG, BigDecimal totalMrp,
-			String sizeTally, String status, UUID lotId, String warehouse, String bin, java.time.Instant createdAt) {
+			String sizeTally, String status, UUID lotId, String warehouse, String bin, java.time.Instant createdAt,
+			@com.fasterxml.jackson.annotation.JsonRawValue String priceLines) {
 	}
 
 	public record StockLine(String skuCode, String brand, String category, String gender, String grade,
@@ -59,7 +102,8 @@ public class InventoryService {
 	private static final String CARTON_SELECT = """
 			select h.id, h.lpn, c.ref as container_ref, b.sku_code, br.name as brand, ca.name as category,
 			       b.gender, b.grade, b.mrp_band, h.piece_count, h.weight_g, h.total_mrp,
-			       h.size_tally::text as size_tally, h.status, h.lot_id, w.name as warehouse, bl.code as bin, h.created_at
+			       h.size_tally::text as size_tally, h.status, h.lot_id, w.name as warehouse, bl.code as bin, h.created_at,
+			       h.price_lines::text as price_lines
 			from handling_unit h
 			join container c on c.id = h.container_id
 			join warehouse w on w.id = h.warehouse_id
@@ -164,7 +208,8 @@ public class InventoryService {
 	}
 
 	/** Sorting step: one carton of one bucket. Derives the bucket SKU, issues an LPN and writes the ledger. */
-	public CartonView addCarton(UUID tenantId, UUID containerId, NewCarton n) {
+	public CartonView addCarton(UUID tenantId, UUID containerId, NewCarton input) {
+		var n = input.withTotalsFromLines();
 		validate(n);
 		var container = jdbc.sql("select warehouse_id, status from container where id = ? for update")
 			.param(containerId)
@@ -189,10 +234,10 @@ public class InventoryService {
 		var lpn = "LPN-" + Long.toString(Math.abs(RANDOM.nextLong()) % 2_821_109_907_456L, 36).toUpperCase();
 		jdbc.sql("""
 				insert into handling_unit(id, tenant_id, lpn, container_id, bucket_id, warehouse_id, piece_count,
-				                          weight_g, total_mrp, size_tally)
-				values (?,?,?,?,?,?,?,?,?, ?::jsonb)""")
+				                          weight_g, total_mrp, size_tally, price_lines)
+				values (?,?,?,?,?,?,?,?,?, ?::jsonb, ?::jsonb)""")
 			.params(id, tenantId, lpn, containerId, bucketId, container[0], n.pieceCount(), n.weightG(), n.totalMrp(),
-					sizeJson(n.sizeTally()))
+					sizeJson(n.sizeTally()), linesJson(n.priceLines()))
 			.update();
 		ledger(tenantId, id, "RECEIVE_SORT", 1, n.pieceCount(), "CONTAINER", containerId);
 		return jdbc.sql(CARTON_SELECT + " where h.id = ?").param(id).query(CartonView.class).single();
@@ -345,7 +390,7 @@ public class InventoryService {
 		if (n.grade() == null || !n.grade().matches("[ABC]")) {
 			throw bad("Grade must be A, B or C");
 		}
-		if (n.pieceCount() <= 0 || n.pieceCount() > 5000 || n.weightG() <= 0) {
+		if (n.pieceCount() == null || n.pieceCount() <= 0 || n.pieceCount() > 5000 || n.weightG() <= 0) {
 			throw bad("Piece count (1-5000) and weight are required");
 		}
 		if (n.totalMrp() == null || n.totalMrp().signum() <= 0) {
@@ -365,6 +410,16 @@ public class InventoryService {
 	}
 
 	// Keys are validated to [A-Z0-9]{1,5} above, so plain concatenation is safe JSON.
+	private static String linesJson(List<PriceLine> lines) {
+		if (lines == null || lines.isEmpty()) {
+			return null;
+		}
+		return lines.stream()
+			.map(l -> "{\"size\":\"" + l.size().trim().toUpperCase() + "\",\"mrp\":" + l.mrp().toPlainString()
+					+ ",\"pieces\":" + l.pieces() + "}")
+			.collect(Collectors.joining(",", "[", "]"));
+	}
+
 	private static String sizeJson(Map<String, Integer> tally) {
 		if (tally == null) {
 			return "{}";

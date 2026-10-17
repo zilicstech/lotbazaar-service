@@ -46,6 +46,23 @@ class AccessAndReportTests extends WorkflowTestBase {
 	}
 
 	@Test
+	void sortingStationPostsPriceLinesOnly() throws Exception {
+		var s = shop();
+		var c = container(s);
+		// What the sorting form sends: no piece count, total MRP or tally; the server derives them.
+		mvc.perform(post("/api/seller/containers/" + c + "/cartons").header("Authorization", token(s, "WAREHOUSE"))
+			.contentType("application/json")
+			.content("""
+					{"brandId":"%s","categoryId":"%s","gender":"M","grade":"A","weightG":6000,
+					 "priceLines":[{"size":"S","mrp":1000,"pieces":10},{"size":"S","mrp":2000,"pieces":10}]}"""
+				.formatted(s.brand(), s.category())))
+			.andExpect(status().isCreated())
+			.andExpect(jsonPath("$.pieceCount").value(20))
+			.andExpect(jsonPath("$.totalMrp").value(30000.0))
+			.andExpect(jsonPath("$.priceLines[1].mrp").value(2000));
+	}
+
+	@Test
 	void recoveryAllocatesSalesToContainerByMrpShare() throws Exception {
 		var s = shop();
 		var b = buyer(s, "08");
